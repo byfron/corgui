@@ -1,4 +1,5 @@
 #include "corgui.hpp"
+#include <examples/opengl3_example/imgui_impl_glfw_gl3.h>
 #include "GL/gl3w.h"
 #include "imgui.h"
 #include "shaders.hpp"
@@ -6,6 +7,8 @@
 #include <vector>
 #include <Eigen/Dense>
 #include <iostream>
+#include <stdio.h>
+#include <GLFW/glfw3.h>
 
 typedef Eigen::Matrix4f Mat4f;
 typedef Eigen::Vector2f Vec2f;
@@ -255,6 +258,7 @@ typedef std::shared_ptr<CorGuiView> CorGuiViewPtr;
 struct CorGuiContext {
 	std::map<std::string, CorGuiViewPtr> views;
 	CorGuiViewPtr current_view;
+	GLFWwindow* window;
 };
 
 #ifndef gCorGuiCtx
@@ -496,21 +500,43 @@ void PostRender(CorGuiViewPtr view) {
 	);
 }
 
+static void error_callback(int error, const char* description)
+{
+    fprintf(stderr, "Error %d: %s\n", error, description);
+}
+
+int CorGui::CreateWindow(const std::string& name, int w, int h) {
+
+	CorGuiContext& ctx = *gCorGuiCtx;
+
+    glfwSetErrorCallback(error_callback);
+    if (!glfwInit())
+        return 1;
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+#if __APPLE__
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+#endif
+    ctx.window = glfwCreateWindow(w, h, name.c_str(), NULL, NULL);
+    glfwMakeContextCurrent(ctx.window);
+    glfwSwapInterval(1); // Enable vsync
+    gl3wInit();
+
+	ImGui_ImplGlfwGL3_Init(ctx.window, true);
+	return 0;
+}
+
 CorGuiContextPtr CorGui::CreateContext() {
+	
 	CorGuiContextPtr ctx = std::shared_ptr<CorGuiContext>(new CorGuiContext());
 	SetCurrentContext(ctx);
 	InitializeContext(ctx);
 	return ctx;
 }
 
-void FreeBuffers(CorGuiContextPtr ctx) {
+void FreeBuffers(CorGuiContext& ctx) {
 
-}
-
-void CorGui::DestroyContext(CorGuiContextPtr ctx) {
-	if (ctx) {
-		FreeBuffers(ctx);
-	}   
 }
 
 CorGuiViewPtr FindViewByName(const std::string& name) {
@@ -602,8 +628,40 @@ bool CorGui::Begin(const std::string& name, CorGuiWindowFlags flags) {
 bool CorGui::End() {
 	CorGuiContext& ctx = *gCorGuiCtx;
 	PostRender(ctx.current_view);
-	ImGui::End();
+	ImGui::End();		
 	return true;
+}
+
+void CorGui::ShutDown() {
+	CorGuiContext& ctx = *gCorGuiCtx;
+	ImGui_ImplGlfwGL3_Shutdown();
+	FreeBuffers(ctx);
+    ImGui::DestroyContext();
+    glfwTerminate();
+}
+
+bool CorGui::ShouldClose() {
+	CorGuiContext& ctx = *gCorGuiCtx;
+	return glfwWindowShouldClose(ctx.window);
+}
+
+void CorGui::BeginFrame() {
+	glfwPollEvents();
+	ImGui_ImplGlfwGL3_NewFrame();
+}
+
+void CorGui::EndFrame() {
+	// Rendering
+	CorGuiContext& ctx = *gCorGuiCtx;
+	static ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+	int display_w, display_h;
+	glfwGetFramebufferSize(ctx.window, &display_w, &display_h);
+	glViewport(0, 0, display_w, display_h);
+	glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.w);
+	glClear(GL_COLOR_BUFFER_BIT);
+	ImGui::Render();
+	ImGui_ImplGlfwGL3_RenderDrawData(ImGui::GetDrawData());
+	glfwSwapBuffers(ctx.window);
 }
 
 CorGuiGeometryPtr FindGeometryByName(const std::string& name) {

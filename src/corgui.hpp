@@ -1,4 +1,5 @@
 #pragma once
+#include <imgui.h>
 #include <memory>
 #include <map>
 
@@ -14,9 +15,14 @@ typedef std::shared_ptr<CorGuiContext> CorGuiContextPtr;
 namespace CorGui {
 	
 	CorGuiContextPtr CreateContext();
+	int CreateWindow(const std::string& name, int w, int h);
 	void DestroyContext(CorGuiContextPtr ctx);
-	bool Begin(const std::string& name, CorGuiWindowFlags flags);
+	bool Begin(const std::string& name, CorGuiWindowFlags flags);	
 	bool End();
+	void BeginFrame();
+	void EndFrame();
+	bool ShouldClose();
+	void ShutDown();
 
 	template <typename T>
 	void SetUniform(const std::string& name, const T& object);
