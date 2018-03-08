@@ -7,14 +7,13 @@ int main(int, char**)
 	CorGui::CreateContext();
 
 	// Create OpenGL window
-	CorGui::CreateWindow("examle", 800, 600);
+	CorGui::CreateWindow("example", 800, 600);
 	
 	CorGuiWindowFlags flags;
 	
     // Main loop
     while (!CorGui::ShouldClose())
     {
-
 		CorGui::BeginFrame();
 		CorGui::Begin("view0", flags);
 		CorGui::Sphere("sphere0", 0.1);

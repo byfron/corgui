@@ -5,6 +5,7 @@
 #include "shaders.hpp"
 #include <string>
 #include <vector>
+#include <stack>
 #include <Eigen/Dense>
 #include <iostream>
 #include <stdio.h>
@@ -50,8 +51,8 @@ struct CorGuiProgram {
 
 	static constexpr GLuint undefined_program_id = (std::numeric_limits<GLuint>::max)();
 
-	CorGuiProgram(const std::string& vs = shaders::default_vs,
-				  const std::string& fs = shaders::default_fs) {
+	CorGuiProgram(const std::string& vs = shaders::single_color_vs, //default_vs,
+				  const std::string& fs = shaders::single_color_fs) { //default_fs) {
 		shaders.push_back(CorGuiShader(vs, GL_VERTEX_SHADER));
 		shaders.push_back(CorGuiShader(fs, GL_FRAGMENT_SHADER));
 		compileProgram();
@@ -224,10 +225,7 @@ struct CorGuiCamera {
 typedef std::shared_ptr<CorGuiCamera> CorGuiCameraPtr;
 
 struct CorGuiGeometry {
-	int num_triangles = 0;
-	GLuint vertex_buffer = 0;
-	GLuint normal_buffer = 0;
-	GLuint index_buffer = 0;
+	virtual void render() = 0;
 	Eigen::Matrix4f model_matrix = Eigen::Matrix4f::Identity();
 	EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
@@ -255,10 +253,19 @@ struct CorGuiView {
 
 typedef std::shared_ptr<CorGuiView> CorGuiViewPtr;
 
+struct CorGuiState {
+	Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
+	EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+		
+};
+typedef std::shared_ptr<CorGuiState> CorGuiStatePtr;
+
 struct CorGuiContext {
 	std::map<std::string, CorGuiViewPtr> views;
 	CorGuiViewPtr current_view;
 	GLFWwindow* window;
+	std::stack<CorGuiStatePtr> state_stack;
+	CorGuiStatePtr current_state;
 };
 
 #ifndef gCorGuiCtx
@@ -332,7 +339,37 @@ void indexVBO(const std::vector<T> & in_vertices,
 		}
 	}
 }
+	
 }
+
+struct CorGuiPointCloud : public CorGuiGeometry {
+
+	static const int MAX_SIZE = 360000;
+	
+	CorGuiPointCloud(const float *_data, int _npoints) : data(_data), npoints(_npoints) {
+		glGenBuffers(1, &vertex_buffer);
+		glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer);
+		glBufferData(GL_ARRAY_BUFFER, MAX_SIZE * 3 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+	}
+	
+	void render() {
+
+		if (data && npoints > 0) {		
+			glEnableVertexAttribArray(0);
+			glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer);
+			glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * 3 * npoints, data);
+			glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
+	   		
+			glDrawArrays(GL_POINTS, 0, npoints);
+			glDisableVertexAttribArray(0);
+		}
+	}
+
+	GLuint vertex_buffer = 0;
+	const float *data;
+	int npoints = 0;
+};
+typedef std::shared_ptr<CorGuiPointCloud> CorGuiPointCloudPtr;
 
 struct CorGuiMesh : public CorGuiGeometry {
 
@@ -396,6 +433,12 @@ struct CorGuiMesh : public CorGuiGeometry {
 		glBufferSubData(GL_ARRAY_BUFFER, 0, nbuffer.size() * sizeof(T), nbuffer.data());
 		glBindBuffer(GL_ARRAY_BUFFER, 0);	
 	}
+
+	int num_triangles = 0;
+	GLuint vertex_buffer = 0;
+	GLuint normal_buffer = 0;
+	GLuint index_buffer = 0;
+	
 };
 	
 struct CorGuiSphere : public CorGuiMesh {
@@ -444,6 +487,23 @@ struct CorGuiSphere : public CorGuiMesh {
 		generate<Vec3f>(vertex_buffer, normal_buffer);
 	}
 
+	void render() {		
+		glEnableVertexAttribArray(0);
+		glEnableVertexAttribArray(1);
+
+		glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+		glBindBuffer(GL_ARRAY_BUFFER, normal_buffer);	
+		glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+	
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_buffer);
+		glDrawElements(GL_TRIANGLES, num_triangles, GL_UNSIGNED_INT, nullptr);
+		glDisableVertexAttribArray(0);
+		glDisableVertexAttribArray(1);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+	}
+
 	Vec3f color;
 	
 };
@@ -454,6 +514,12 @@ void SetCurrentContext(CorGuiContextPtr ctx) {
 }
 
 void InitializeContext(CorGuiContextPtr ctx) {
+	
+	ctx->state_stack = std::stack<CorGuiStatePtr>();
+
+	// push first state to the context
+	ctx->state_stack.push(CorGuiStatePtr(new CorGuiState()));
+	ctx->current_state = ctx->state_stack.top();
 	
 }
 
@@ -679,6 +745,13 @@ CorGuiGeometryPtr CreateSphere(const std::string& name, float radius) {
 	return sphere;
 }
 
+CorGuiGeometryPtr CreatePointCloud(const std::string& name, const float* data, int npoints) {
+	CorGuiContext& ctx = *gCorGuiCtx;
+	CorGuiGeometryPtr cloud = CorGuiGeometryPtr(new CorGuiPointCloud(data, npoints));
+	ctx.current_view->geometry[name] = cloud;
+	return cloud;
+}
+
 namespace {
 	void SetUniform_(GLuint uniform, bool, const float& object) {
 		glUniform1fv(uniform, 1, &object);
@@ -695,7 +768,7 @@ namespace {
 }
 
 template <typename T>
-void CorGui::SetUniform(const std::string& name, const T& object) {
+void SetUniform(const std::string& name, const T& object) {
 	CorGuiContext& ctx = *gCorGuiCtx;
 	GLuint uniform = glGetUniformLocation(ctx.current_view->current_shader->id, name.c_str());
 	SetUniform_(uniform, false, object);
@@ -704,33 +777,23 @@ void CorGui::SetUniform(const std::string& name, const T& object) {
 void RenderGeometry(CorGuiGeometryPtr geometry) {
 
 	CorGuiContext& ctx = *gCorGuiCtx;
-	
+	CorGuiStatePtr state = ctx.current_state;
+
+	// use the shader from the state instead!
 	glUseProgram(ctx.current_view->current_shader->id);
 
+	
 	Vec3f color = Vec3f(1.0, 1.0, 0.0);
 	Mat4f mvp = (ctx.current_view->camera->getViewProjectionMatrix() *
-				 geometry->model_matrix);
+				 state->transform); //	geometry->model_matrix 
 	
-	CorGui::SetUniform<Mat4f>("mvp", mvp);
-	CorGui::SetUniform<Mat4f>("m", geometry->model_matrix);
-	CorGui::SetUniform<Mat4f>("v", ctx.current_view->camera->view);
-	CorGui::SetUniform<Vec3f>("lightpos_worldspace", Vec3f(0,0,0));
-	CorGui::SetUniform<Vec3f>("fragment_color", color);
-	
-	glEnableVertexAttribArray(0);
-	glEnableVertexAttribArray(1);
+	SetUniform<Mat4f>("mvp", mvp);
+	SetUniform<Mat4f>("m", state->transform); //geometry->model_matrix);
+	SetUniform<Mat4f>("v", ctx.current_view->camera->view);
+	SetUniform<Vec3f>("lightpos_worldspace", Vec3f(0,1,0));
+	SetUniform<Vec3f>("fragment_color", color);
 
-	glBindBuffer(GL_ARRAY_BUFFER, geometry->vertex_buffer);
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
-
-	glBindBuffer(GL_ARRAY_BUFFER, geometry->normal_buffer);	
-	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
-	
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, geometry->index_buffer);
-	glDrawElements(GL_TRIANGLES, geometry->num_triangles, GL_UNSIGNED_INT, nullptr);
-	glDisableVertexAttribArray(0);
-	glDisableVertexAttribArray(1);
-	glBindBuffer(GL_ARRAY_BUFFER, 0);	
+	geometry->render();	
 }
 
 void CorGui::Sphere(const std::string& name, float radius) {
@@ -739,4 +802,35 @@ void CorGui::Sphere(const std::string& name, float radius) {
 		sphere = CreateSphere(name, radius);
 	}	
 	RenderGeometry(sphere);	
+}
+
+void CorGui::PointCloud(const std::string&name, const float* points, int npoints) {
+	CorGuiGeometryPtr cloud = FindGeometryByName(name);
+	if (!cloud) {
+		cloud = CreatePointCloud(name, points, npoints);
+	}	
+	RenderGeometry(cloud);	
+}
+
+
+void CorGui::PushState() {
+	CorGuiContext& ctx = *gCorGuiCtx;
+	ctx.state_stack.push(CorGuiStatePtr(new CorGuiState()));
+	ctx.current_state = ctx.state_stack.top();	
+}
+
+void CorGui::PopState() {
+	CorGuiContext& ctx = *gCorGuiCtx;
+	if (ctx.state_stack.size() == 1) return;
+	
+	ctx.state_stack.pop();
+	ctx.current_state = ctx.state_stack.top();
+}
+	
+// Transforms
+void CorGui::Translate(float x, float y, float z) {
+	CorGuiContext& ctx = *gCorGuiCtx;
+	CorGuiStatePtr state = ctx.current_state;
+	state->transform.col(3).head(3) = Eigen::Vector3f(x,y,z);	
+	
 }

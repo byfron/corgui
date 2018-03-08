@@ -24,8 +24,15 @@ namespace CorGui {
 	bool ShouldClose();
 	void ShutDown();
 
-	template <typename T>
-	void SetUniform(const std::string& name, const T& object);
-
+	void PushState();
+	void PopState();
+	
+	// Transforms
+	void Translate(float x, float y, float z);
+	
+	// Geometry
 	void Sphere(const std::string& name, float radius);
+
+	// TODO template types
+	void PointCloud(const std::string& name, const float* points, int npoints);
 };
